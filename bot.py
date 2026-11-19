@@ -5,10 +5,8 @@ import os
 from flask import Flask
 from datetime import datetime, timedelta
 
-# --- KEEP YOUR OWN TOKEN AND CHAT ID ---
 BOT_TOKEN = "9266653853:AAFpf9kwzoyvspyGzl9tx_swERivkHXYB0Y"
 CHAT_ID = "@brightfx555"
-# ---------------------------------------
 
 app = Flask(__name__)
 
@@ -64,18 +62,19 @@ def get_rsi(symbol):
         return None, None
 
 def format_pair(pair):
-    # EURUSD -> EUR/USD-OTC
     return f"{pair[:3]}/{pair[3:]}-OTC"
 
+last_sent = ""  # to block duplicate
+
 def bot_loop():
-    print("Bot loop started - 1 STRONG SIGNAL, 2M EXPIRY, ENTRY +2 MINS...")
+    global last_sent
+    print("Bot loop started - 1 SIGNAL, NIGERIA TIME...")
     send_telegram("✅ BRIGHT FX SIGNAL Started\n1 Strong Signal / 5 Mins\nExpiry: 2 Mins\nEntry: 2 Mins Ahead")
     while True:
         try:
             print(f"\n--- Checking... {time.strftime('%H:%M:%S')} ---")
             best_pair = None
             best_rsi = None
-            best_price = None
             best_strength = 0
 
             for pair in PAIRS:
@@ -89,11 +88,10 @@ def bot_loop():
                         best_strength = strength
                         best_pair = pair
                         best_rsi = rsi
-                        best_price = price
 
             if best_pair:
-                # Entry = 2 mins from now, so people get time to enter
-                now = datetime.now()
+                # NIGERIA TIME = UTC + 1 hour
+                now = datetime.utcnow() + timedelta(hours=1)
                 entry = now + timedelta(minutes=2)
                 mart1 = entry + timedelta(minutes=2)
                 mart2 = entry + timedelta(minutes=4)
@@ -101,16 +99,19 @@ def bot_loop():
                 mart1_str = mart1.strftime("%H:%M")
                 mart2_str = mart2.strftime("%H:%M")
 
-                direction = "BUY 🟢" if best_rsi <= 30 else "SELL 🔴"
-                emoji = "🟢" if best_rsi <= 30 else "🔴"
-
-                msg = f"BRIGHT FX SIGNAL\n\n🌐 {format_pair(best_pair)}\n⏳ Expiration 2 minutes\n✅ Entry at {entry_str}\n{emoji} {direction}\n\nUse martingale if necessary 👇\n1️⃣ MARTINGALE AT {mart1_str}\n2️⃣ MARTINGALE AT {mart2_str}"
-
-                send_telegram(msg)
-                print(f">>> 1 STRONG SIGNAL SENT: {best_pair} {direction} RSI={best_rsi}")
+                # BLOCK DUPLICATE: if same pair + same entry time, no send again
+                key = f"{best_pair}-{entry_str}"
+                if key == last_sent:
+                    print(f"Duplicate blocked: {key}")
+                else:
+                    last_sent = key
+                    direction = "BUY 🟢" if best_rsi <= 30 else "SELL 🔴"
+                    emoji = "🟢" if best_rsi <= 30 else "🔴"
+                    msg = f"BRIGHT FX SIGNAL\n\n🌐 {format_pair(best_pair)}\n⏳ Expiration 2 minutes\n✅ Entry at {entry_str}\n{emoji} {direction}\n\nUse martingale if necessary 👇\n1️⃣ MARTINGALE AT {mart1_str}\n2️⃣ MARTINGALE AT {mart2_str}"
+                    send_telegram(msg)
+                    print(f">>> 1 SIGNAL SENT: {best_pair} {direction} RSI={best_rsi}")
             else:
-                print("No strong signal this round, waiting 5 mins...")
-
+                print("No strong signal, waiting 5 mins...")
             time.sleep(300)
         except Exception as e:
             print(f"Loop error: {e}")

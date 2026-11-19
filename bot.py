@@ -1,124 +1,101 @@
-import requests
-import time
-import threading
-import os
-from flask import Flask
-from datetime import datetime, timedelta
+import os, time, yfinance as yf, pandas as pd, requests
+from datetime import datetime, timezone, timedelta
 
-BOT_TOKEN = "9266653853:AAFpf9kwzoyvspyGzl9tx_swERivkHXYB0Y"
-CHAT_ID = "@brightfx555"
+BOT_TOKEN = os.getenv("9266653853:AAFpf9kwzoyvspyGzl9tx_swERivkHXYB0Y")
+CHAT_ID = os.getenv("@brightfx555")
 
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is running"
+# 40 REAL PAIRS - WITH USD/PLN & USD/NGN
+PAIRS = {
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CAD": "USDCAD=X",
+    "USD/CHF": "USDCHF=X",
+    "NZD/USD": "NZDUSD=X",
+    "EUR/GBP": "EURGBP=X",
+    "EUR/JPY": "EURJPY=X",
+    "GBP/JPY": "GBPJPY=X",
+    "AUD/JPY": "AUDJPY=X",
+    "EUR/AUD": "EURAUD=X",
+    "EUR/CAD": "EURCAD=X",
+    "EUR/CHF": "EURCHF=X",
+    "GBP/AUD": "GBPAUD=X",
+    "GBP/CAD": "GBPCAD=X",
+    "GBP/CHF": "GBPCHF=X",
+    "AUD/CAD": "AUDCAD=X",
+    "AUD/CHF": "AUDCHF=X",
+    "AUD/NZD": "AUDNZD=X",
+    "NZD/JPY": "NZDJPY=X",
+    "NZD/CAD": "NZDCAD=X",
+    "NZD/CHF": "NZDCHF=X",
+    "CAD/JPY": "CADJPY=X",
+    "CAD/CHF": "CADCHF=X",
+    "CHF/JPY": "CHFJPY=X",
+    "EUR/NZD": "EURNZD=X",
+    "GBP/NZD": "GBPNZD=X",
+    "USD/SGD": "USDSGD=X",
+    "USD/MXN": "USDMXN=X",
+    "USD/ZAR": "USDZAR=X",
+    "USD/TRY": "USDTRY=X",
+    "USD/PLN": "USDPLN=X",
+    "USD/NGN": "USDNGN=X",
+    "EUR/TRY": "EURTRY=X",
+    "GBP/TRY": "GBPTRY=X",
+    "EUR/ZAR": "EURZAR=X",
+    "EUR/MXN": "EURMXN=X",
+    "USD/NOK": "USDNOK=X",
+    "EUR/NOK": "EURNOK=X",
+}
 
 def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
+
+def get_rsi(close, period=14):
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def check_pair(name, ticker):
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
+        df = yf.download(ticker, period="1d", interval="5m", progress=False)
+        if len(df) < 30:
+            return None
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        close = df['Close']
+        rsi = get_rsi(close).iloc[-1]
+        ema9 = close.ewm(span=9).mean().iloc[-1]
+        ema21 = close.ewm(span=21).mean().iloc[-1]
+        price = close.iloc[-1]
+        signal = None
+        if rsi < 35 and ema9 > ema21 and price > ema21:
+            signal = "BUY 🟢 CALL"
+        elif rsi > 65 and ema9 < ema21 and price < ema21:
+            signal = "SELL 🔴 PUT"
+        if signal:
+            now_wat = datetime.now(timezone.utc) + timedelta(hours=1)
+            enter_time = now_wat + timedelta(minutes=2)
+            return f"📊 <b>{name} - IQ OPTION REAL</b>\nSignal: <b>{signal}</b>\nPrice: {price:.5f}\nRSI: {rsi:.1f}\n🕐 ENTER AT: <b>{enter_time.strftime('%H:%M')} WAT</b>\n⏳ EXPIRY: <b>5 Minutes</b>"
+        return None
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"Error {name}: {e}")
+        return None
 
-PAIRS = [
-    "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","USDCHF","NZDUSD",
-    "EURGBP","EURJPY","GBPJPY","AUDJPY","CADJPY","CHFJPY","NZDJPY",
-    "EURAUD","EURCAD","EURNZD","GBPAUD","GBPCAD","GBPNZD","AUDCAD",
-    "AUDNZD","CADCHF","AUDCHF","NZDCHF","EURCHF","GBPCHF",
-    "EURTRY","USDTRY","GBPTRY"
-]
-
-def get_rsi(symbol):
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}=X?range=5d&interval=5m"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=10)
-        data = r.json()
-        closes = data['chart']['result'][0]['indicators']['quote'][0]['close']
-        closes = [c for c in closes if c is not None]
-        if len(closes) < 15:
-            return None, None
-        gains = []
-        losses = []
-        for i in range(1, 15):
-            diff = closes[-15+i] - closes[-15+i-1]
-            if diff > 0:
-                gains.append(diff)
-                losses.append(0)
-            else:
-                gains.append(0)
-                losses.append(abs(diff))
-        avg_gain = sum(gains)/14
-        avg_loss = sum(losses)/14
-        if avg_loss == 0:
-            rsi = 100
-        else:
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-        return closes[-1], round(rsi, 1)
-    except Exception as e:
-        print(f"{symbol} error: {e}")
-        return None, None
-
-def format_pair(pair):
-    return f"{pair[:3]}/{pair[3:]}-OTC"
-
-last_sent = ""  # to block duplicate
-
-def bot_loop():
-    global last_sent
-    print("Bot loop started - 1 SIGNAL, NIGERIA TIME...")
-    send_telegram("✅ BRIGHT FX SIGNAL Started\n1 Strong Signal / 5 Mins\nExpiry: 2 Mins\nEntry: 2 Mins Ahead")
+def main():
+    print("IQ OPTION REAL BOT - 40 PAIRS STARTED")
     while True:
-        try:
-            print(f"\n--- Checking... {time.strftime('%H:%M:%S')} ---")
-            best_pair = None
-            best_rsi = None
-            best_strength = 0
-
-            for pair in PAIRS:
-                price, rsi = get_rsi(pair)
-                if price is None:
-                    continue
-                print(f"{pair}: RSI={rsi}")
-                if rsi >= 70 or rsi <= 30:
-                    strength = abs(rsi - 50)
-                    if strength > best_strength:
-                        best_strength = strength
-                        best_pair = pair
-                        best_rsi = rsi
-
-            if best_pair:
-                # NIGERIA TIME = UTC + 1 hour
-                now = datetime.utcnow() + timedelta(hours=1)
-                entry = now + timedelta(minutes=2)
-                mart1 = entry + timedelta(minutes=2)
-                mart2 = entry + timedelta(minutes=4)
-                entry_str = entry.strftime("%H:%M")
-                mart1_str = mart1.strftime("%H:%M")
-                mart2_str = mart2.strftime("%H:%M")
-
-                # BLOCK DUPLICATE: if same pair + same entry time, no send again
-                key = f"{best_pair}-{entry_str}"
-                if key == last_sent:
-                    print(f"Duplicate blocked: {key}")
-                else:
-                    last_sent = key
-                    direction = "BUY 🟢" if best_rsi <= 30 else "SELL 🔴"
-                    emoji = "🟢" if best_rsi <= 30 else "🔴"
-                    msg = f"BRIGHT FX SIGNAL\n\n🌐 {format_pair(best_pair)}\n⏳ Expiration 2 minutes\n✅ Entry at {entry_str}\n{emoji} {direction}\n\nUse martingale if necessary 👇\n1️⃣ MARTINGALE AT {mart1_str}\n2️⃣ MARTINGALE AT {mart2_str}"
-                    send_telegram(msg)
-                    print(f">>> 1 SIGNAL SENT: {best_pair} {direction} RSI={best_rsi}")
-            else:
-                print("No strong signal, waiting 5 mins...")
-            time.sleep(300)
-        except Exception as e:
-            print(f"Loop error: {e}")
-            time.sleep(30)
-
-threading.Thread(target=bot_loop, daemon=True).start()
+        signals = []
+        for name, ticker in PAIRS.items():
+            s = check_pair(name, ticker)
+            if s:
+                signals.append(s)
+        if signals:
+            msg = "🔥 <b>IQ OPTION REAL - 5M SIGNAL</b> 🔥\n\n" + "\n\n---\n\n".join(signals)
+            send_telegram(msg)
+        time.sleep(300)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    main()

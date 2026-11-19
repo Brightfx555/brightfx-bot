@@ -3,11 +3,12 @@ import time
 import threading
 import os
 from flask import Flask
+from datetime import datetime, timedelta
 
-# --- KEEP YOUR OWN TOKEN AND CHAT ID HERE ---
+# --- KEEP YOUR OWN TOKEN AND CHAT ID ---
 BOT_TOKEN = "9266653853:AAFpf9kwzoyvspyGzl9tx_swERivkHXYB0Y"
 CHAT_ID = "@brightfx555"
-# -------------------------------------------
+# ---------------------------------------
 
 app = Flask(__name__)
 
@@ -22,7 +23,6 @@ def send_telegram(msg):
     except Exception as e:
         print(f"Telegram error: {e}")
 
-# 30 pairs
 PAIRS = [
     "EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","USDCHF","NZDUSD",
     "EURGBP","EURJPY","GBPJPY","AUDJPY","CADJPY","CHFJPY","NZDJPY",
@@ -33,10 +33,7 @@ PAIRS = [
 
 def get_rsi(symbol):
     try:
-        # Use Binance klines for forex-like calc via Yahoo? We use TwelveData-style simple fetch
-        # Using Binance for crypto-like pairs, fallback to Yahoo for forex
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}=X?range=5d&interval=5m"
-        # Convert EURUSD -> EURUSD=X
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
@@ -44,7 +41,6 @@ def get_rsi(symbol):
         closes = [c for c in closes if c is not None]
         if len(closes) < 15:
             return None, None
-        # RSI 14
         gains = []
         losses = []
         for i in range(1, 15):
@@ -67,32 +63,55 @@ def get_rsi(symbol):
         print(f"{symbol} error: {e}")
         return None, None
 
+def format_pair(pair):
+    # EURUSD -> EUR/USD-OTC
+    return f"{pair[:3]}/{pair[3:]}-OTC"
+
 def bot_loop():
-    print("Bot loop started - NO EMA VERSION...")
-    send_telegram("✅ Safe Bot Started - NO EMA, RSI ONLY\n30 Pairs, 5 Min Check")
+    print("Bot loop started - 1 STRONG SIGNAL, 2M EXPIRY, ENTRY +2 MINS...")
+    send_telegram("✅ BRIGHT FX SIGNAL Started\n1 Strong Signal / 5 Mins\nExpiry: 2 Mins\nEntry: 2 Mins Ahead")
     while True:
         try:
             print(f"\n--- Checking... {time.strftime('%H:%M:%S')} ---")
-            found = 0
+            best_pair = None
+            best_rsi = None
+            best_price = None
+            best_strength = 0
+
             for pair in PAIRS:
                 price, rsi = get_rsi(pair)
                 if price is None:
-                    print(f"{pair}: No data")
                     continue
-                print(f"{pair}: Price={round(price,4)} RSI={rsi}")
-                signal = None
-                if rsi >= 70:
-                    signal = "SELL 🔴"
-                elif rsi <= 30:
-                    signal = "BUY 🟢"
-                if signal:
-                    found += 1
-                    msg = f"📊 {pair} - {signal}\nPrice: {round(price,4)}\nRSI: {rsi}\nTimeframe: 5m\nExpiry: 5 mins"
-                    send_telegram(msg)
-                    print(f">>> SIGNAL SENT: {pair} {signal}")
-            if found == 0:
-                print("No signal this round, waiting 5 mins...")
-            time.sleep(300)  # 5 mins
+                print(f"{pair}: RSI={rsi}")
+                if rsi >= 70 or rsi <= 30:
+                    strength = abs(rsi - 50)
+                    if strength > best_strength:
+                        best_strength = strength
+                        best_pair = pair
+                        best_rsi = rsi
+                        best_price = price
+
+            if best_pair:
+                # Entry = 2 mins from now, so people get time to enter
+                now = datetime.now()
+                entry = now + timedelta(minutes=2)
+                mart1 = entry + timedelta(minutes=2)
+                mart2 = entry + timedelta(minutes=4)
+                entry_str = entry.strftime("%H:%M")
+                mart1_str = mart1.strftime("%H:%M")
+                mart2_str = mart2.strftime("%H:%M")
+
+                direction = "BUY 🟢" if best_rsi <= 30 else "SELL 🔴"
+                emoji = "🟢" if best_rsi <= 30 else "🔴"
+
+                msg = f"BRIGHT FX SIGNAL\n\n🌐 {format_pair(best_pair)}\n⏳ Expiration 2 minutes\n✅ Entry at {entry_str}\n{emoji} {direction}\n\nUse martingale if necessary 👇\n1️⃣ MARTINGALE AT {mart1_str}\n2️⃣ MARTINGALE AT {mart2_str}"
+
+                send_telegram(msg)
+                print(f">>> 1 STRONG SIGNAL SENT: {best_pair} {direction} RSI={best_rsi}")
+            else:
+                print("No strong signal this round, waiting 5 mins...")
+
+            time.sleep(300)
         except Exception as e:
             print(f"Loop error: {e}")
             time.sleep(30)

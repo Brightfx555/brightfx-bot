@@ -1,9 +1,23 @@
 import os
 import time
 import requests
+import threading
+from flask import Flask
 
-TOKEN = os.getenv("9266653853:AAFpf9kwzoyvspyGzl9tx_swERivkHXYB0Y")
-CHAT_ID = os.getenv("@brightfx555")
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+def keep_alive():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X", "EURGBP=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X", "EURAUD=X", "EURNZD=X", "GBPAUD=X", "GBPCHF=X", "CADJPY=X", "CHFJPY=X", "EURCAD=X", "EURCHF=X", "AUDCAD=X", "AUDCHF=X", "NZDJPY=X", "NZDCAD=X", "NZDCHF=X", "GBPCAD=X", "GBPNZD=X", "EURSEK=X", "USDSEK=X", "USDMXN=X", "USDZAR=X"]
 
@@ -55,9 +69,9 @@ def check():
             e21 = ema(closes, 21)
             name = NAMES[sym]
             signal = None
-            if r < 30 and last > e9:
+            if r < 30 and last > e9 and e9 > e21:
                 signal = "CALL 🟢 UP"
-            elif r > 70 and last < e9:
+            elif r > 70 and last < e9 and e9 < e21:
                 signal = "PUT 🔴 DOWN"
             if signal:
                 msg = f"📊 *{name} SIGNAL*\n\nDirection: {signal}\nPrice: {last:.5f}\nRSI: {r:.1f}\nEMA9: {e9:.5f} | EMA21: {e21:.5f}\nTimeframe: 5M\n\n💰 *Martingale:*\nLevel 1: $1\nLevel 2: $2.20\nLevel 3: $4.80\n\n⚠️ Trade manually for IQ Option. No auto-trade."

@@ -1,5 +1,2 @@
-git+https://github.com/iqoptionapi/iqoptionapi.git
-pandas
 requests
-websocket-client
-python-dateutil
+Flask

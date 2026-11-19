@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 BOT_TOKEN = os.getenv("9266653853:AAFpf9kwzoyvspyGzl9tx_swERivkHXYB0Y")
 CHAT_ID = os.getenv("@brightfx555")
 
-# 40 REAL PAIRS - WITH USD/PLN & USD/NGN
+# 30 REAL PAIRS FOR IQ OPTION REAL - WITH USD/PLN & USD/NGN
 PAIRS = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
@@ -34,18 +34,8 @@ PAIRS = {
     "CHF/JPY": "CHFJPY=X",
     "EUR/NZD": "EURNZD=X",
     "GBP/NZD": "GBPNZD=X",
-    "USD/SGD": "USDSGD=X",
-    "USD/MXN": "USDMXN=X",
-    "USD/ZAR": "USDZAR=X",
-    "USD/TRY": "USDTRY=X",
     "USD/PLN": "USDPLN=X",
     "USD/NGN": "USDNGN=X",
-    "EUR/TRY": "EURTRY=X",
-    "GBP/TRY": "GBPTRY=X",
-    "EUR/ZAR": "EURZAR=X",
-    "EUR/MXN": "EURMXN=X",
-    "USD/NOK": "USDNOK=X",
-    "EUR/NOK": "EURNOK=X",
 }
 
 def send_telegram(msg):
@@ -61,7 +51,7 @@ def get_rsi(close, period=14):
 
 def check_pair(name, ticker):
     try:
-        df = yf.download(ticker, period="1d", interval="5m", progress=False)
+        df = yf.download(ticker, period="1d", interval="5m", progress=False, auto_adjust=False)
         if len(df) < 30:
             return None
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
@@ -85,13 +75,14 @@ def check_pair(name, ticker):
         return None
 
 def main():
-    print("IQ OPTION REAL BOT - 40 PAIRS STARTED")
+    print("IQ OPTION REAL BOT - 30 PAIRS STARTED")
     while True:
         signals = []
         for name, ticker in PAIRS.items():
             s = check_pair(name, ticker)
             if s:
                 signals.append(s)
+            time.sleep(2)  # Delay so Yahoo no block us
         if signals:
             msg = "🔥 <b>IQ OPTION REAL - 5M SIGNAL</b> 🔥\n\n" + "\n\n---\n\n".join(signals)
             send_telegram(msg)

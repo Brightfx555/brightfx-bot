@@ -1,89 +1,98 @@
 import os
 import time
-import requests
 import threading
+import requests
+import yfinance as yf
+import pandas as pd
+import numpy as np
 from flask import Flask
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot is running"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def keep_alive():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# Loosened small so signals go come more
+RSI_BUY = 35
+RSI_SELL = 65
+CHECK_EVERY = 300  # 5 mins
 
-threading.Thread(target=keep_alive, daemon=True).start()
-
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-
-PAIRS = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X", "USDCHF=X", "NZDUSD=X", "EURGBP=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X", "EURAUD=X", "EURNZD=X", "GBPAUD=X", "GBPCHF=X", "CADJPY=X", "CHFJPY=X", "EURCAD=X", "EURCHF=X", "AUDCAD=X", "AUDCHF=X", "NZDJPY=X", "NZDCAD=X", "NZDCHF=X", "GBPCAD=X", "GBPNZD=X", "EURSEK=X", "USDSEK=X", "USDMXN=X", "USDZAR=X"]
-
-NAMES = {"EURUSD=X":"EUR/USD", "GBPUSD=X":"GBP/USD", "USDJPY=X":"USD/JPY", "AUDUSD=X":"AUD/USD", "USDCAD=X":"USD/CAD", "USDCHF=X":"USD/CHF", "NZDUSD=X":"NZD/USD", "EURGBP=X":"EUR/GBP", "EURJPY=X":"EUR/JPY", "GBPJPY=X":"GBP/JPY", "AUDJPY=X":"AUD/JPY", "EURAUD=X":"EUR/AUD", "EURNZD=X":"EUR/NZD", "GBPAUD=X":"GBP/AUD", "GBPCHF=X":"GBP/CHF", "CADJPY=X":"CAD/JPY", "CHFJPY=X":"CHF/JPY", "EURCAD=X":"EUR/CAD", "EURCHF=X":"EUR/CHF", "AUDCAD=X":"AUD/CAD", "AUDCHF=X":"AUD/CHF", "NZDJPY=X":"NZD/JPY", "NZDCAD=X":"NZD/CAD", "NZDCHF=X":"NZD/CHF", "GBPCAD=X":"GBP/CAD", "GBPNZD=X":"GBP/NZD", "EURSEK=X":"EUR/SEK", "USDSEK=X":"USD/SEK", "USDMXN=X":"USD/MXN", "USDZAR=X":"USD/ZAR"}
+PAIRS = [
+    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X",
+    "EURGBP=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X", "NZDUSD=X",
+    "USDCHF=X", "EURCHF=X", "GBPCHF=X", "AUDCAD=X", "AUDCHF=X",
+    "CADJPY=X", "CHFJPY=X", "EURAUD=X", "EURCAD=X", "GBPAUD=X",
+    "GBPCAD=X", "NZDJPY=X", "NZDCAD=X", "NZDCHF=X", "AUDNZD=X",
+    "CADCHF=X", "EURNZD=X", "GBPNZD=X", "USDTRY=X", "EURTRY=X"
+]
 
 def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("No Telegram config", flush=True)
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
+        print(f"Sent Telegram: {msg[:50]}", flush=True)
+    except Exception as e:
+        print(f"Telegram error: {e}", flush=True)
 
-def get_candles(symbol):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=5m"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=10).json()
-    res = r["chart"]["result"][0]
-    closes = res["indicators"]["quote"][0]["close"]
-    return [c for c in closes if c is not None]
-
-def rsi(closes, period=14):
-    gains, losses = [], []
-    for i in range(1, len(closes)):
-        diff = closes[i] - closes[i-1]
-        gains.append(max(diff, 0))
-        losses.append(max(-diff, 0))
-    if len(gains) < period:
-        return 50
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    if avg_loss == 0:
-        return 100
-    rs = avg_gain / avg_loss
+def calc_rsi(data, period=14):
+    delta = data.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def ema(closes, period):
-    k = 2 / (period + 1)
-    e = closes[0]
-    for c in closes[1:]:
-        e = c * k + e * (1 - k)
-    return e
+def check_one_pair(ticker):
+    try:
+        df = yf.download(ticker, period="1d", interval="5m", progress=False)
+        if df.empty or len(df) < 20:
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        close = df['Close']
+        rsi = calc_rsi(close).iloc[-1]
+        ema20 = close.ewm(span=20).mean().iloc[-1]
+        price = float(close.iloc[-1])
+        name = ticker.replace("=X", "")
+        print(f"{name}: Price={price:.5f} RSI={rsi:.1f} EMA20={ema20:.5f}", flush=True)
+        if rsi <= RSI_BUY and price > ema20:
+            return f"🟢 <b>BUY {name}</b>\nPrice: {price:.5f}\nRSI: {rsi:.1f} | EMA20: {ema20:.5f}\nTime: 5M | Expiry: 5 mins"
+        if rsi >= RSI_SELL and price < ema20:
+            return f"🔴 <b>SELL {name}</b>\nPrice: {price:.5f}\nRSI: {rsi:.1f} | EMA20: {ema20:.5f}\nTime: 5M | Expiry: 5 mins"
+        return None
+    except Exception as e:
+        print(f"Error {ticker}: {e}", flush=True)
+        return None
 
-def check():
-    for sym in PAIRS:
+def bot_loop():
+    print("Bot loop started...", flush=True)
+    send_telegram("✅ <b>Safe Bot Started - FIXED VERSION</b>\n30 Pairs, I go check every 5 mins and I go write for logs.")
+    while True:
         try:
-            closes = get_candles(sym)
-            if len(closes) < 20:
-                continue
-            last = closes[-1]
-            r = rsi(closes)
-            e9 = ema(closes, 9)
-            e21 = ema(closes, 21)
-            name = NAMES[sym]
-            signal = None
-            if r < 30 and last > e9 and e9 > e21:
-                signal = "CALL 🟢 UP"
-            elif r > 70 and last < e9 and e9 < e21:
-                signal = "PUT 🔴 DOWN"
-            if signal:
-                msg = f"📊 *{name} SIGNAL*\n\nDirection: {signal}\nPrice: {last:.5f}\nRSI: {r:.1f}\nEMA9: {e9:.5f} | EMA21: {e21:.5f}\nTimeframe: 5M\n\n💰 *Martingale:*\nLevel 1: $1\nLevel 2: $2.20\nLevel 3: $4.80\n\n⚠️ Trade manually for IQ Option. No auto-trade."
-                send_telegram(msg)
-                print(f"Sent {name} {signal}")
-            else:
-                print(f"{name} no signal RSI {r:.1f}")
+            print(f"--- Checking... {time.strftime('%H:%M:%S')} ---", flush=True)
+            found = 0
+            for ticker in PAIRS:
+                signal = check_one_pair(ticker)
+                if signal:
+                    send_telegram(f"📈 <b>BRIGHT FX SIGNAL</b>\n\n{signal}\n\n⚠️ Trade with care, no 95% guarantee.")
+                    found += 1
+                    time.sleep(2)
+            if found == 0:
+                print("No signal this round, waiting 5 mins...", flush=True)
+            time.sleep(CHECK_EVERY)
         except Exception as e:
-            print(f"Error {sym}: {e}")
-        time.sleep(1)
+            print(f"Loop error: {e}", flush=True)
+            time.sleep(60)
 
-send_telegram("✅ Safe Bot Started — 30 Pairs, No IQ Login, signals only. I go check every 5 mins.")
-while True:
-    check()
-    time.sleep(300)
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+# Start loop in background so Flask + Bot go run together
+threading.Thread(target=bot_loop, daemon=True).start()
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
